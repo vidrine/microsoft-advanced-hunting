@@ -1,0 +1,21 @@
+# From: https://techcommunity.microsoft.com/t5/microsoft-defender-for-endpoint/advanced-hunting-updates-usb-events-machine-level-actions-and/ba-p/824152
+
+DeviceEvents
+| where Timestamp > ago(1d)
+| where ActionType == "UsbDriveMount"
+| project USBMountTime = Timestamp, DeviceId, AdditionalFields
+| extend DriveLetter = tostring(todynamic(AdditionalFields).DriveLetter)
+| join (
+DeviceFileEvents
+| where Timestamp > ago(1d)
+| where ActionType == "FileCreated"
+| where FileName endswith ".docx" or FileName endswith ".pptx"
+| parse FolderPath with DriveLetter '\\' *
+| extend DriveLetter = tostring(DriveLetter)
+)
+on DeviceId, DriveLetter
+| where (Timestamp - USBMountTime) between (0min .. 15min)
+| summarize DistinctFilesCopied = dcount(SHA1), Events=makeset(pack("AccountName", InitiatingProcessAccountName, "Timestamp", Timestamp, "ReportId", ReportId, "FileName", FileName, "AdditionalDriveProperties", AdditionalFields)) by DeviceId, bin(Timestamp, 15m)
+| where DistinctFilesCopied > 10
+| mv-expand Events
+| extend Timestamp = todatetime(Events.Timestamp), FileName = Events.FileName, AccountName = Events.AccountName, ReportId = tolong(Events.ReportId), AdditionalDriveProperties = Events.AdditionalDriveProperties
